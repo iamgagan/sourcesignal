@@ -1,12 +1,13 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   Search, Star, GitFork, ArrowUp, ArrowDown,
   RefreshCw, Loader2, LayoutGrid, List, TrendingUp,
   Activity, Clock, Flame, ExternalLink, Bell,
-  FileText, Radio, X, Check,
+  FileText, Radio, X, Check, Command, Zap, Gem, Mountain, Rocket,
+  Code2, ChevronRight,
 } from 'lucide-react';
 import { AreaChart, Area, ResponsiveContainer } from 'recharts';
-import { CATEGORIES, CATEGORY_COLORS, type Repo, type Category } from './data';
+import { CATEGORIES, CATEGORY_COLORS, CATEGORY_ICONS, type Repo, type Category } from './data';
 import { useRepos } from './hooks/useRepos';
 import { useOpenFang } from './hooks/useOpenFang';
 import { useAlerts, formatMilestone } from './hooks/useAlerts';
@@ -424,6 +425,349 @@ function AlertPanel({ alerts, onMarkSeen, onClear, onClose }: {
   );
 }
 
+/* ── Smart Collections ── */
+interface SmartCollection {
+  id: string;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+  color: string;
+  filter: (repos: Repo[]) => Repo[];
+}
+
+const SMART_COLLECTIONS: SmartCollection[] = [
+  {
+    id: 'rising',
+    label: 'Rising Stars',
+    description: 'New repos with explosive growth',
+    icon: <Zap className="w-4 h-4" />,
+    color: '#fbbf24',
+    filter: (repos) => repos
+      .filter(r => r.stars < 30000 && r.starsWeekDelta > 500)
+      .sort((a, b) => b.starsWeekDelta - a.starsWeekDelta),
+  },
+  {
+    id: 'gems',
+    label: 'Hidden Gems',
+    description: 'Under the radar but growing fast',
+    icon: <Gem className="w-4 h-4" />,
+    color: '#a78bfa',
+    filter: (repos) => repos
+      .filter(r => r.stars < 15000 && r.starsWeekDelta > 200)
+      .sort((a, b) => (b.starsWeekDelta / b.stars) - (a.starsWeekDelta / a.stars)),
+  },
+  {
+    id: 'giants',
+    label: 'Established Giants',
+    description: 'Battle-tested with 50K+ stars',
+    icon: <Mountain className="w-4 h-4" />,
+    color: '#38bdf8',
+    filter: (repos) => repos
+      .filter(r => r.stars >= 50000)
+      .sort((a, b) => b.stars - a.stars),
+  },
+  {
+    id: 'hot',
+    label: 'On Fire',
+    description: 'Fastest velocity right now',
+    icon: <Flame className="w-4 h-4" />,
+    color: '#f87171',
+    filter: (repos) => repos
+      .filter(r => r.starsWeekDelta > 1000)
+      .sort((a, b) => b.starsWeekDelta - a.starsWeekDelta),
+  },
+];
+
+function SmartCollections({ repos, activeCollection, onSelect }: {
+  repos: Repo[];
+  activeCollection: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  return (
+    <div className="p-4 border-b border-border">
+      <div className="flex items-center gap-2 mb-3">
+        <Rocket className="w-4 h-4 text-accent" />
+        <h2 className="text-xs font-bold text-dim uppercase tracking-wider">Quick Collections</h2>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {SMART_COLLECTIONS.map(col => {
+          const matches = col.filter(repos);
+          const isActive = activeCollection === col.id;
+          if (matches.length === 0) return null;
+          return (
+            <button
+              key={col.id}
+              onClick={() => onSelect(isActive ? null : col.id)}
+              className={`group text-left p-3 rounded-lg border transition-all duration-150 cursor-pointer ${
+                isActive
+                  ? 'bg-raised border-accent/30 shadow-lg shadow-accent/5'
+                  : 'bg-raised/40 border-border hover:bg-raised/80 hover:border-border-bright'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className={`transition-colors ${isActive ? 'text-accent' : 'text-muted group-hover:text-primary'}`}
+                  style={isActive ? {} : { color: col.color }}>
+                  {col.icon}
+                </span>
+                <span className={`text-sm font-semibold ${isActive ? 'text-accent' : 'text-primary'}`}>{col.label}</span>
+              </div>
+              <p className="text-[10px] text-subtle mb-2 leading-relaxed">{col.description}</p>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-mono text-muted tabular-nums">{matches.length} repos</span>
+                {matches[0] && (
+                  <span className="text-[10px] font-mono text-signal-green">+{formatNum(matches[0].starsWeekDelta)}/w</span>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── Command Palette ── */
+type PaletteResult =
+  | { type: 'repo'; repo: Repo }
+  | { type: 'category'; category: Category; count: number }
+  | { type: 'language'; language: string; count: number; color: string }
+  | { type: 'collection'; collection: SmartCollection; count: number };
+
+function CommandPalette({ repos, open, onClose, onSelectRepo, onSelectCategory, onSelectCollection }: {
+  repos: Repo[];
+  open: boolean;
+  onClose: () => void;
+  onSelectRepo: (url: string) => void;
+  onSelectCategory: (cat: Category) => void;
+  onSelectCollection: (id: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      setQuery('');
+      setSelectedIndex(0);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [open]);
+
+  const results = useMemo((): PaletteResult[] => {
+    const q = query.toLowerCase().trim();
+    const items: PaletteResult[] = [];
+
+    // Collections
+    for (const col of SMART_COLLECTIONS) {
+      const matches = col.filter(repos);
+      if (matches.length > 0 && (!q || col.label.toLowerCase().includes(q) || col.description.toLowerCase().includes(q))) {
+        items.push({ type: 'collection', collection: col, count: matches.length });
+      }
+    }
+
+    // Categories
+    const catCounts: Partial<Record<Category, number>> = {};
+    for (const r of repos) catCounts[r.category] = (catCounts[r.category] || 0) + 1;
+    for (const cat of CATEGORIES) {
+      if (catCounts[cat] && (!q || cat.toLowerCase().includes(q))) {
+        items.push({ type: 'category', category: cat, count: catCounts[cat]! });
+      }
+    }
+
+    // Languages
+    const langCounts: Record<string, number> = {};
+    for (const r of repos) langCounts[r.language] = (langCounts[r.language] || 0) + 1;
+    const sortedLangs = Object.entries(langCounts).sort(([, a], [, b]) => b - a);
+    for (const [lang, count] of sortedLangs) {
+      if (!q || lang.toLowerCase().includes(q)) {
+        items.push({ type: 'language', language: lang, count, color: LANG_COLORS[lang] || '#5a6a88' });
+      }
+    }
+
+    // Repos — fuzzy match
+    const repoResults = repos.filter(r =>
+      !q ||
+      r.name.toLowerCase().includes(q) ||
+      r.fullName.toLowerCase().includes(q) ||
+      r.description.toLowerCase().includes(q) ||
+      r.language.toLowerCase().includes(q)
+    ).sort((a, b) => b.starsWeekDelta - a.starsWeekDelta);
+
+    for (const repo of repoResults.slice(0, q ? 10 : 5)) {
+      items.push({ type: 'repo', repo });
+    }
+
+    return items;
+  }, [repos, query]);
+
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [query]);
+
+  // Scroll selected item into view
+  useEffect(() => {
+    if (listRef.current) {
+      const selected = listRef.current.children[selectedIndex] as HTMLElement;
+      if (selected) selected.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedIndex]);
+
+  const handleSelect = useCallback((result: PaletteResult) => {
+    switch (result.type) {
+      case 'repo':
+        onSelectRepo(result.repo.url);
+        break;
+      case 'category':
+        onSelectCategory(result.category);
+        break;
+      case 'collection':
+        onSelectCollection(result.collection.id);
+        break;
+      case 'language':
+        // Navigate to search with language filter
+        onClose();
+        break;
+    }
+    onClose();
+  }, [onClose, onSelectRepo, onSelectCategory, onSelectCollection]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex(i => Math.min(i + 1, results.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex(i => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter' && results[selectedIndex]) {
+      e.preventDefault();
+      handleSelect(results[selectedIndex]);
+    } else if (e.key === 'Escape') {
+      onClose();
+    }
+  }, [results, selectedIndex, handleSelect, onClose]);
+
+  if (!open) return null;
+
+  const sectionLabel = (type: string, index: number) => {
+    const prev = results[index - 1];
+    if (!prev || prev.type !== type) {
+      const labels: Record<string, string> = {
+        collection: 'Collections',
+        category: 'Categories',
+        language: 'Languages',
+        repo: 'Repositories',
+      };
+      return labels[type] || null;
+    }
+    return null;
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[15vh]" onClick={onClose}>
+      <div className="absolute inset-0 bg-void/70 backdrop-blur-sm" />
+      <div
+        className="relative w-full max-w-lg bg-raised border border-border rounded-xl shadow-2xl shadow-void/60 overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Input */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
+          <Command className="w-4 h-4 text-accent shrink-0" />
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder="Search repos, categories, languages, collections..."
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            className="flex-1 bg-transparent text-sm text-primary placeholder:text-muted focus:outline-none"
+          />
+          <kbd className="hidden sm:inline-flex items-center gap-0.5 text-[10px] text-muted bg-overlay border border-border rounded px-1.5 py-0.5 font-mono">ESC</kbd>
+        </div>
+
+        {/* Results */}
+        <div ref={listRef} className="max-h-[50vh] overflow-y-auto py-1">
+          {results.length === 0 ? (
+            <div className="p-8 text-center">
+              <Search className="w-6 h-6 text-muted mx-auto mb-2" />
+              <p className="text-sm text-subtle">No results found</p>
+            </div>
+          ) : (
+            results.map((result, i) => {
+              const label = sectionLabel(result.type, i);
+              return (
+                <div key={`${result.type}-${i}`}>
+                  {label && (
+                    <div className="px-4 pt-2.5 pb-1">
+                      <span className="text-[10px] font-bold text-subtle uppercase tracking-wider">{label}</span>
+                    </div>
+                  )}
+                  <button
+                    className={`w-full text-left px-4 py-2 flex items-center gap-3 cursor-pointer transition-colors ${
+                      i === selectedIndex ? 'bg-accent/10 text-accent' : 'text-primary hover:bg-raised/80'
+                    }`}
+                    onClick={() => handleSelect(result)}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                  >
+                    {result.type === 'repo' && (
+                      <>
+                        <Code2 className="w-3.5 h-3.5 text-muted shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium truncate block">{result.repo.fullName}</span>
+                          <span className="text-xs text-subtle truncate block">{result.repo.description}</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 text-xs font-mono text-dim">
+                          <span className="inline-flex items-center gap-1"><Star className="w-3 h-3 text-signal-amber/60" />{formatNum(result.repo.stars)}</span>
+                          <span className="text-signal-green">+{formatNum(result.repo.starsWeekDelta)}</span>
+                        </div>
+                        <ChevronRight className="w-3 h-3 text-muted shrink-0" />
+                      </>
+                    )}
+                    {result.type === 'category' && (
+                      <>
+                        <span className="w-3.5 text-center shrink-0">{CATEGORY_ICONS[result.category]}</span>
+                        <span className="text-sm flex-1">{result.category}</span>
+                        <span className="text-xs font-mono text-muted">{result.count} repos</span>
+                        <ChevronRight className="w-3 h-3 text-muted shrink-0" />
+                      </>
+                    )}
+                    {result.type === 'language' && (
+                      <>
+                        <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: result.color }} />
+                        <span className="text-sm flex-1">{result.language}</span>
+                        <span className="text-xs font-mono text-muted">{result.count} repos</span>
+                        <ChevronRight className="w-3 h-3 text-muted shrink-0" />
+                      </>
+                    )}
+                    {result.type === 'collection' && (
+                      <>
+                        <span className="shrink-0" style={{ color: result.collection.color }}>{result.collection.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium">{result.collection.label}</span>
+                          <span className="text-xs text-subtle block">{result.collection.description}</span>
+                        </div>
+                        <span className="text-xs font-mono text-muted shrink-0">{result.count}</span>
+                        <ChevronRight className="w-3 h-3 text-muted shrink-0" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Footer hint */}
+        <div className="px-4 py-2 border-t border-border flex items-center gap-4 text-[10px] text-muted font-mono">
+          <span className="inline-flex items-center gap-1"><ArrowUp className="w-2.5 h-2.5" /><ArrowDown className="w-2.5 h-2.5" /> navigate</span>
+          <span className="inline-flex items-center gap-1"><kbd className="bg-overlay border border-border rounded px-1">↵</kbd> select</span>
+          <span className="inline-flex items-center gap-1"><kbd className="bg-overlay border border-border rounded px-1">esc</kbd> close</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type SortKey = 'stars' | 'starsWeekDelta' | 'forks' | 'name';
 type ViewMode = 'list' | 'grid' | 'digest';
 
@@ -434,11 +778,25 @@ function App() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [view, setView] = useState<ViewMode>('list');
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [activeCollection, setActiveCollection] = useState<string | null>(null);
   const alertRef = useRef<HTMLDivElement>(null);
 
   const { repos, loading, error, lastUpdated, refresh, isFromCache, isFromSeed } = useRepos();
   const { status: openfangStatus } = useOpenFang();
   const { alerts, unseenCount, markAllSeen, clearAlerts } = useAlerts(repos);
+
+  // Cmd+K to open command palette
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setPaletteOpen(prev => !prev);
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Close alerts on click outside
   useEffect(() => {
@@ -452,6 +810,11 @@ function App() {
   }, [alertsOpen]);
 
   const filtered = useMemo(() => {
+    // If a smart collection is active, use its filter
+    if (activeCollection) {
+      const col = SMART_COLLECTIONS.find(c => c.id === activeCollection);
+      if (col) return col.filter(repos);
+    }
     let result = [...repos];
     if (search) {
       const q = search.toLowerCase();
@@ -471,7 +834,7 @@ function App() {
       return sortDir === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
     });
     return result;
-  }, [repos, search, activeCategory, sortBy, sortDir]);
+  }, [repos, search, activeCategory, activeCollection, sortBy, sortDir]);
 
   const topMovers = useMemo(() => {
     let pool = [...repos];
@@ -505,10 +868,25 @@ function App() {
     </button>
   );
 
-  const showFeatured = !search && sortBy === 'starsWeekDelta' && sortDir === 'desc' && view !== 'digest';
+  const showFeatured = !search && !activeCollection && sortBy === 'starsWeekDelta' && sortDir === 'desc' && view !== 'digest';
+
+  const handleCollectionSelect = useCallback((id: string | null) => {
+    setActiveCollection(id);
+    if (id) { setSearch(''); setActiveCategory(null); }
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col bg-grid noise relative">
+      {/* Command Palette */}
+      <CommandPalette
+        repos={repos}
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onSelectRepo={(url) => window.open(url, '_blank')}
+        onSelectCategory={(cat) => { setActiveCategory(cat); setActiveCollection(null); }}
+        onSelectCollection={(id) => handleCollectionSelect(id)}
+      />
+
       {/* ── Header ── */}
       <header className="sticky top-0 z-50 bg-void/90 backdrop-blur-xl border-b border-border">
         <div className="max-w-[1440px] mx-auto px-5 py-3 flex items-center justify-between gap-4">
@@ -523,21 +901,18 @@ function App() {
             <span className="hidden sm:block text-[10px] text-subtle bg-overlay px-2 py-0.5 rounded-full border border-border font-mono">AI/ML</span>
           </div>
 
-          {/* Search */}
+          {/* Search + Cmd+K */}
           <div className="flex-1 max-w-lg">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-subtle" />
-              <input
-                type="text"
-                placeholder="Search repos, categories, languages..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="w-full bg-raised border border-border rounded-lg pl-9 pr-3 py-2 text-sm text-primary placeholder:text-muted focus:outline-none focus:border-accent/50 focus:bg-overlay transition-all duration-150"
-              />
-              {search && (
-                <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-subtle hover:text-primary text-xs cursor-pointer">ESC</button>
-              )}
-            </div>
+            <button
+              onClick={() => setPaletteOpen(true)}
+              className="w-full bg-raised border border-border rounded-lg px-3 py-2 text-sm text-muted flex items-center gap-2 hover:border-accent/50 hover:bg-overlay transition-all duration-150 cursor-pointer"
+            >
+              <Search className="w-3.5 h-3.5 text-subtle" />
+              <span className="flex-1 text-left">Search repos, categories, collections...</span>
+              <kbd className="hidden sm:inline-flex items-center gap-0.5 text-[10px] text-muted bg-overlay border border-border rounded px-1.5 py-0.5 font-mono">
+                <Command className="w-2.5 h-2.5" />K
+              </kbd>
+            </button>
           </div>
 
           {/* Status + Actions */}
@@ -688,6 +1063,27 @@ function App() {
                 className={`shrink-0 px-2.5 py-1 rounded-md text-xs cursor-pointer font-medium transition-colors ${activeCategory === cat ? 'bg-accent/15 text-accent' : 'text-subtle hover:text-dim'}`}>{cat}</button>
             ))}
           </div>
+
+          {/* Smart Collections */}
+          {!search && view !== 'digest' && (
+            <SmartCollections
+              repos={repos}
+              activeCollection={activeCollection}
+              onSelect={handleCollectionSelect}
+            />
+          )}
+
+          {/* Active collection indicator */}
+          {activeCollection && (
+            <div className="mx-4 mt-3 px-3 py-2 rounded-lg bg-accent/5 border border-accent/20 flex items-center justify-between">
+              <span className="text-xs text-accent font-medium">
+                Showing: {SMART_COLLECTIONS.find(c => c.id === activeCollection)?.label}
+              </span>
+              <button onClick={() => setActiveCollection(null)} className="text-xs text-subtle hover:text-primary cursor-pointer flex items-center gap-1">
+                <X className="w-3 h-3" /> Clear
+              </button>
+            </div>
+          )}
 
           {/* Featured: Top Movers */}
           {showFeatured && topMovers.length > 0 && (
