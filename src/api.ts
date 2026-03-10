@@ -264,7 +264,9 @@ export async function fetchTrendingAIRepos(): Promise<Repo[]> {
       }
     } catch (err) {
       if (err instanceof RateLimitError) {
-        throw err;
+        // Keep whatever we collected so far instead of throwing everything away
+        console.warn(`Rate limited after ${allRepos.length} repos, returning partial results`);
+        break;
       }
       console.warn(`GitHub search query failed: ${query}`, err);
     }

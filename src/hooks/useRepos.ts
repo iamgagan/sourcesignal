@@ -32,7 +32,7 @@ function mergeWithSeedData(apiRepos: Repo[]): Repo[] {
 }
 
 export function useRepos(): UseReposResult {
-  const [repos, setRepos] = useState<Repo[]>([]);
+  const [repos, setRepos] = useState<Repo[]>(SEED_REPOS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
