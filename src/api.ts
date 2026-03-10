@@ -301,7 +301,7 @@ export async function fetchRecentlyTrending(): Promise<Repo[]> {
 // --- localStorage caching ---
 
 const CACHE_KEY = 'sourcesignal_repos_cache';
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
 interface CacheEntry {
   repos: Repo[];

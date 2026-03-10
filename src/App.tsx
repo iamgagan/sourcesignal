@@ -787,7 +787,7 @@ function App() {
             <span className="text-[11px] text-muted font-mono">SourceSignal</span>
           </div>
           <p className="text-[11px] text-muted font-mono">
-            GitHub API &middot; 30 min cache
+            GitHub API &middot; 1 hr cache
             {openfangStatus.connected && ' \u00b7 OpenFang connected'}
             {isFromSeed && ' \u00b7 showing seed data'}
           </p>
